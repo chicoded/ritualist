@@ -1,0 +1,203 @@
+import { type Request, type Response } from 'express';
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
+import pool from '../config/db.js';
+import { type RowDataPacket, type ResultSetHeader } from 'mysql2';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'secret';
+
+export const register = async (req: Request, res: Response) => {
+  const { username, email, password, role } = req.body;
+if(req.method === "GET"){
+    res.status(400).json({ success: false, message: 'Please use POST method for registration' });
+    return;
+}
+  if (!username || !email || !password) {
+    res.status(400).json({ success: false, message: 'Please provide all required fields' });
+    return;
+  }
+
+  try {
+    // Check if user exists
+    const [existingUsers] = await pool.query<RowDataPacket[]>('SELECT * FROM users WHERE email = ? OR username = ?', [email, username]);
+    if (existingUsers.length > 0) {
+      res.status(409).json({ success: false, message: 'User already exists' });
+      return;
+    }
+
+    // Hash password
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(password, salt);
+
+    const defaultAvatar = `https://avatar.iran.liara.run/public?seed=${encodeURIComponent(username)}-${Date.now()}`;
+    // Insert user
+    const [result] = await pool.query<ResultSetHeader>(
+      'INSERT INTO users (username, email, password_hash, role, avatar_url) VALUES (?, ?, ?, ?, ?)',
+      [username, email, passwordHash, role || 'participant', defaultAvatar]
+    );
+
+    const token = jwt.sign({ id: result.insertId, username, role: role || 'participant' }, JWT_SECRET, { expiresIn: '24h' });
+
+    res.status(201).json({
+      success: true,
+      token,
+      user: { id: result.insertId, username, email, role: role || 'participant' }
+    });
+
+  } catch (error: any) {
+    console.error(error);
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
+  }
+};
+
+export const login = async (req: Request, res: Response) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    res.status(400).json({ success: false, message: 'Please provide email and password' });
+    return;
+  }
+
+  try {
+    const [users] = await pool.query<RowDataPacket[]>('SELECT * FROM users WHERE email = ?', [email]);
+    if (users.length === 0) {
+      res.status(401).json({ success: false, message: 'Invalid credentials' });
+      return;
+    }
+
+    const user = users[0];
+    if (!user) {
+        res.status(401).json({ success: false, message: 'Invalid credentials' });
+        return;
+    }
+
+    const isMatch = await bcrypt.compare(password, user['password_hash']);
+
+    if (!isMatch) {
+      res.status(401).json({ success: false, message: 'Invalid credentials' });
+      return;
+    }
+
+    const token = jwt.sign({ id: user['id'], username: user['username'], role: user['role'] }, JWT_SECRET, { expiresIn: '24h' });
+
+    res.json({
+      success: true,
+      token,
+      user: { id: user['id'], username: user['username'], email: user['email'], role: user['role'], avatar_url: user['avatar_url'] }
+    });
+
+  } catch (error: any) {
+    console.error(error);
+    res.status(500).json({ success: false, message: 'Server error', error: error.message });
+  }
+};
+
+export const discordRedirect = async (req: Request, res: Response) => {
+  try {
+    const clientId = process.env.DISCORD_CLIENT_ID;
+    const redirectUri = process.env.DISCORD_REDIRECT_URI;
+    if (!clientId || !redirectUri) {
+      res.status(500).json({ success: false, message: 'Discord OAuth not configured: set DISCORD_CLIENT_ID and DISCORD_REDIRECT_URI in .env' });
+      return;
+    }
+    const scope = encodeURIComponent('identify email');
+    const state = Math.random().toString(36).slice(2);
+    const url = `https://discord.com/oauth2/authorize?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scope}&state=${state}`;
+    console.log('Discord OAuth authorize URL:', url);
+    res.redirect(url);
+  } catch (e: any) {
+    res.status(500).json({ success: false, message: 'Discord redirect error' });
+  }
+};
+
+export const discordCallback = async (req: Request, res: Response) => {
+  try {
+    const code = req.query.code as string;
+    if (!code) {
+      res.status(400).send('Missing code');
+      return;
+    }
+    const clientId = process.env.DISCORD_CLIENT_ID;
+    const clientSecret = process.env.DISCORD_CLIENT_SECRET;
+    const redirectUri = process.env.DISCORD_REDIRECT_URI;
+    if (!clientId || !clientSecret || !redirectUri) {
+      res.status(500).send('Discord OAuth not configured');
+      return;
+    }
+
+    const body = new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: redirectUri,
+    });
+
+    const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+    const tokenJson = await tokenRes.json();
+    if (!tokenRes.ok) {
+      res.status(400).send('Discord token exchange failed');
+      return;
+    }
+    const accessToken = tokenJson.access_token;
+    const userRes = await fetch('https://discord.com/api/users/@me', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const dUser = await userRes.json();
+    if (!userRes.ok) {
+      res.status(400).send('Discord user fetch failed');
+      return;
+    }
+
+    const discordId = String(dUser.id);
+    const username = String(dUser.username);
+    const email = dUser.email ? String(dUser.email) : '';
+    const avatarUrl = dUser.avatar ? `https://cdn.discordapp.com/avatars/${discordId}/${dUser.avatar}.png` : null;
+
+    // Upsert user
+    const [existingByDiscord] = await pool.query<RowDataPacket[]>(
+      'SELECT * FROM users WHERE discord_id = ?', [discordId]
+    );
+    let userId: number;
+    if (existingByDiscord.length > 0) {
+      const usr = existingByDiscord[0] as any;
+      userId = Number(usr.id);
+      await pool.query('UPDATE users SET username = ?, email = COALESCE(?, email), avatar_url = ? WHERE id = ?', [username, email || usr.email, avatarUrl, userId]);
+    } else {
+      // If email exists, link account
+      let existingEmailId: number | null = null;
+      if (email) {
+        const [existingByEmail] = await pool.query<RowDataPacket[]>('SELECT id FROM users WHERE email = ?', [email]);
+        if (existingByEmail.length > 0) existingEmailId = Number((existingByEmail[0] as any).id);
+      }
+      if (existingEmailId) {
+        userId = existingEmailId;
+        await pool.query('UPDATE users SET discord_id = ?, avatar_url = ?, username = ? WHERE id = ?', [discordId, avatarUrl, username, userId]);
+      } else {
+        const [ins] = await pool.query<ResultSetHeader>(
+          'INSERT INTO users (username, email, password_hash, role, discord_id, avatar_url) VALUES (?, ?, ?, ?, ?, ?)',
+          [username, email, '', 'participant', discordId, avatarUrl]
+        );
+        userId = ins.insertId;
+      }
+    }
+
+    const token = jwt.sign({ id: userId, username, role: 'participant' }, JWT_SECRET, { expiresIn: '24h' });
+
+    // Return a small HTML to postMessage back to opener
+    const payload = {
+      success: true,
+      token,
+      user: { id: userId, username, email, role: 'participant' },
+    };
+    res.setHeader('Content-Type', 'text/html');
+    res.send(`<!doctype html><html><body><script>try{window.opener&&window.opener.postMessage(${JSON.stringify(payload)},'*');}catch(e){};window.close();</script><p>Login completed. You can close this window.</p></body></html>`);
+  } catch (e: any) {
+    console.error('Discord callback error:', e);
+    res.status(500).send('Server error');
+  }
+};
