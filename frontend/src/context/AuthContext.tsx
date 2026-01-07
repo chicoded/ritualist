@@ -31,6 +31,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setToken(storedToken);
       setUser(JSON.parse(storedUser));
     }
+    const bypass = import.meta.env.VITE_AUTH_BYPASS === '1';
+    if (bypass && !storedToken) {
+      const dummyUser: User = { id: 0, username: 'dev', email: '', role: 'participant', avatar_url: '' };
+      setToken('dev-token');
+      setUser(dummyUser);
+      localStorage.setItem('token', 'dev-token');
+      localStorage.setItem('user', JSON.stringify(dummyUser));
+    }
     setLoading(false);
   }, []);
 

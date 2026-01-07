@@ -81,13 +81,16 @@ const DeviceGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const isCoarse = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
   const isMobileUA = /(Android|iPhone|iPad|iPod|Opera Mini|IEMobile|Mobile)/i.test(ua);
-  const isMobile = isCoarse || isMobileUA;
+  const isSmallScreen = typeof window !== 'undefined' && window.innerWidth <= 768;
+  
+  const isMobile = isCoarse || isMobileUA || isSmallScreen;
+
   if (!isMobile) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#000', color: '#fff', textAlign: 'center', padding: 16 }}>
         <div style={{ maxWidth: 480 }}>
           <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>Mobile Device Required</div>
-          <div style={{ fontSize: 14 }}>Please access this app from a mobile device.</div>
+          <div style={{ fontSize: 14 }}>Please access this app from a mobile device or reduce your screen size.</div>
         </div>
       </div>
     );
