@@ -26,12 +26,8 @@ async function initDb() {
 
     await connection.changeUser({ database: dbName });
 
-    // Path to schema.sql: ../../../database/schema.sql
-    // Adjust based on where this script is run. Assuming run via ts-node from backend root.
-    // If run from backend root: src/scripts/initDb.ts
-    // path.join(process.cwd(), '../database/schema.sql') might be safer if running from backend root.
-    // Or relative to __dirname:
-    const schemaPath = path.resolve(__dirname, '../../../database/schema.sql');
+    // Path to schema.sql: ../database/schema.sql
+    const schemaPath = path.resolve(__dirname, '../database/schema.sql');
     
     console.log(`Reading schema from: ${schemaPath}`);
     const schema = await fs.readFile(schemaPath, 'utf8');
