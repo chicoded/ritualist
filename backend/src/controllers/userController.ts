@@ -15,7 +15,7 @@ export const updateMyAvatar = async (req: AuthRequest, res: Response) => {
     return;
   }
   try {
-    await pool.query('UPDATE users SET avatar_url = ? WHERE id = ?', [avatarUrl, req.user.id]);
+    await pool.query('UPDATE users SET avatar_url = $1 WHERE id = $2', [avatarUrl, req.user.id]);
     res.json({ success: true });
   } catch (e: any) {
     console.error('updateMyAvatar error:', e);
@@ -29,20 +29,20 @@ export const getMyRecentPlayed = async (req: AuthRequest, res: Response) => {
     return;
   }
   try {
-    const [rows] = await pool.query<any[]>(
+    const { rows } = await pool.query(
       `SELECT r.id, r.title, r.room_code,
               MAX(a.created_at) AS last_played,
               COUNT(a.id) AS answered,
               COALESCE(SUM(a.score),0) AS total_score
        FROM answers a
        JOIN rooms r ON r.id = a.room_id
-       WHERE a.user_id = ?
+       WHERE a.user_id = $1
        GROUP BY r.id, r.title, r.room_code
        ORDER BY last_played DESC
        LIMIT 10`,
       [req.user.id]
     );
-    const items = rows.map(r => ({
+    const items = rows.map((r: any) => ({
       id: Number(r.id),
       title: r.title,
       room_code: r.room_code,
@@ -63,8 +63,8 @@ export const getMyScore = async (req: AuthRequest, res: Response) => {
     return;
   }
   try {
-    const [rows] = await pool.query<any[]>(
-      'SELECT COALESCE(SUM(score),0) AS total_score, COALESCE(SUM(is_correct),0) AS correct, COUNT(*) AS answered FROM answers WHERE user_id = ?',
+    const { rows } = await pool.query(
+      'SELECT COALESCE(SUM(score),0) AS total_score, COALESCE(SUM(is_correct),0) AS correct, COUNT(*) AS answered FROM answers WHERE user_id = $1',
       [req.user.id]
     );
     const r = rows && rows[0] ? rows[0] : { total_score: 0, correct: 0, answered: 0 };

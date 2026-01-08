@@ -25,8 +25,8 @@ router.post('/submit', authenticateToken, async (req: AuthRequest, res) => {
       return;
     }
 
-    const [qs] = await pool.query<any[]>(
-      'SELECT correct_answer_index FROM questions WHERE id = ? AND room_id = ?',
+    const { rows: qs } = await pool.query(
+      'SELECT correct_answer_index FROM questions WHERE id = $1 AND room_id = $2',
       [qId, rId]
     );
     if (!qs || qs.length === 0) {
@@ -36,8 +36,8 @@ router.post('/submit', authenticateToken, async (req: AuthRequest, res) => {
     const correct = Number(qs[0].correct_answer_index);
     const isCorrect = sel === correct ? 1 : 0;
 
-    const [roomRows] = await pool.query<any[]>(
-      'SELECT time_per_question, start_time, is_public FROM rooms WHERE id = ?',
+    const { rows: roomRows } = await pool.query(
+      'SELECT time_per_question, start_time, is_public FROM rooms WHERE id = $1',
       [rId]
     );
     if (!roomRows || roomRows.length === 0) {
@@ -69,34 +69,37 @@ router.post('/submit', authenticateToken, async (req: AuthRequest, res) => {
 
     await pool.query(
       `INSERT INTO answers (room_id, question_id, user_id, selected_index, is_correct, score)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE selected_index = VALUES(selected_index), is_correct = VALUES(is_correct), score = VALUES(score)`,
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (room_id, question_id, user_id) DO UPDATE
+       SET selected_index = EXCLUDED.selected_index, is_correct = EXCLUDED.is_correct, score = EXCLUDED.score`,
       [rId, qId, (req.user as any).id, sel, isCorrect, score]
     );
 
-    // Update participant total_score and recompute position
+    // Update participant total_score
     await pool.query(
-      `UPDATE participants p
+      `UPDATE participants
        SET total_score = (
-         SELECT COALESCE(SUM(a.score), 0) FROM answers a WHERE a.room_id = ? AND a.user_id = ?
+         SELECT COALESCE(SUM(a.score), 0) FROM answers a WHERE a.room_id = $1 AND a.user_id = $2
        )
-       WHERE p.room_id = ? AND p.user_id = ?`,
+       WHERE room_id = $3 AND user_id = $4`,
       [rId, (req.user as any).id, rId, (req.user as any).id]
     );
 
-    // Recompute positions for all participants in the room using window functions (MySQL 8+)
+    // Recompute positions for all participants in the room
     await pool.query(
       `UPDATE participants p
-       JOIN (
+       SET position = t.pos
+       FROM (
          SELECT u.id AS user_id,
+                p2.room_id,
                 ROW_NUMBER() OVER (ORDER BY COALESCE(SUM(a.score),0) DESC, COALESCE(SUM(a.is_correct),0) DESC) AS pos
          FROM users u
          JOIN participants p2 ON p2.user_id = u.id
          LEFT JOIN answers a ON a.user_id = u.id AND a.room_id = p2.room_id
-         WHERE p2.room_id = ?
-         GROUP BY u.id
-       ) t ON t.user_id = p.user_id AND p.room_id = ?
-       SET p.position = t.pos`,
+         WHERE p2.room_id = $1
+         GROUP BY u.id, p2.room_id
+       ) t
+       WHERE t.user_id = p.user_id AND t.room_id = p.room_id AND p.room_id = $2`,
       [rId, rId]
     );
 
@@ -110,14 +113,14 @@ router.post('/submit', authenticateToken, async (req: AuthRequest, res) => {
 router.get('/leaderboard/:roomId', authenticateToken, async (req: AuthRequest, res) => {
   const { roomId } = req.params;
   try {
-    const [rows] = await pool.query<any[]>(
+    const { rows } = await pool.query(
       `SELECT u.id as user_id, u.username,
               COALESCE(SUM(a.score), 0) AS score,
               COUNT(*) AS answered,
-              SUM(a.is_correct) AS correct
+              SUM(CASE WHEN a.is_correct THEN 1 ELSE 0 END) AS correct
        FROM answers a
        JOIN users u ON a.user_id = u.id
-       WHERE a.room_id = ?
+       WHERE a.room_id = $1
        GROUP BY u.id, u.username
        ORDER BY score DESC, correct DESC, answered DESC, u.username ASC`,
       [roomId]
@@ -131,10 +134,10 @@ router.get('/leaderboard/:roomId', authenticateToken, async (req: AuthRequest, r
 
 router.get('/leaderboard-global', authenticateToken, async (req: AuthRequest, res) => {
   try {
-    const [rows] = await pool.query<any[]>(
+    const { rows } = await pool.query(
       `SELECT u.id AS user_id, u.username,
               COALESCE(SUM(a.score),0) AS total_score,
-              COALESCE(SUM(a.is_correct),0) AS correct,
+              COALESCE(SUM(CASE WHEN a.is_correct THEN 1 ELSE 0 END),0) AS correct,
               COUNT(*) AS answered,
               COUNT(DISTINCT a.room_id) AS rooms
        FROM answers a
@@ -165,8 +168,8 @@ router.get('/my/:roomId', authenticateToken, async (req: AuthRequest, res) => {
   }
   const { roomId } = req.params;
   try {
-    const [rows] = await pool.query<any[]>(
-      `SELECT question_id, selected_index, is_correct, score FROM answers WHERE room_id = ? AND user_id = ?`,
+    const { rows } = await pool.query(
+      `SELECT question_id, selected_index, is_correct, score FROM answers WHERE room_id = $1 AND user_id = $2`,
       [roomId, (req.user as any).id]
     );
     res.json({ success: true, answers: rows });
@@ -187,12 +190,12 @@ router.post('/my-status', authenticateToken, async (req: AuthRequest, res) => {
       res.json({ success: true, status: [] });
       return;
     }
-    const [qCounts] = await pool.query<any[]>(
-      `SELECT room_id, COUNT(*) AS total FROM questions WHERE room_id IN (?) GROUP BY room_id`,
+    const { rows: qCounts } = await pool.query(
+      `SELECT room_id, COUNT(*) AS total FROM questions WHERE room_id = ANY($1) GROUP BY room_id`,
       [roomIds]
     );
-    const [aCounts] = await pool.query<any[]>(
-      `SELECT room_id, COUNT(*) AS answered FROM answers WHERE user_id = ? AND room_id IN (?) GROUP BY room_id`,
+    const { rows: aCounts } = await pool.query(
+      `SELECT room_id, COUNT(*) AS answered FROM answers WHERE user_id = $1 AND room_id = ANY($2) GROUP BY room_id`,
       [(req.user as any).id, roomIds]
     );
     const qMap = new Map<number, number>();

@@ -1,6 +1,5 @@
 import { type Request, type Response } from 'express';
 import pool from '../config/db.js';
-import { type RowDataPacket, type ResultSetHeader } from 'mysql2';
 import { type AuthRequest } from '../middleware/authMiddleware.js';
 
 export const addQuestion = async (req: AuthRequest, res: Response) => {
@@ -19,44 +18,44 @@ export const addQuestion = async (req: AuthRequest, res: Response) => {
 
   try {
     // Verify ownership
-    const [rooms] = await pool.query<RowDataPacket[]>('SELECT host_id FROM rooms WHERE id = ?', [roomId]);
+    const { rows: rooms } = await pool.query('SELECT host_id FROM rooms WHERE id = $1', [roomId]);
     if (rooms.length === 0) {
       res.status(404).json({ success: false, message: 'Room not found' });
       return;
     }
     const userId = (req.user as any).id as number;
-    const roomRow = rooms[0] as RowDataPacket;
-    const hostId = (roomRow as any).host_id as number;
+    const hostId = rooms[0].host_id;
     if (hostId !== userId) {
       res.status(403).json({ success: false, message: 'Not authorized to edit this room' });
       return;
     }
 
     // Get current max order index
-    const [rows] = await pool.query<RowDataPacket[]>('SELECT MAX(order_index) as maxOrder FROM questions WHERE room_id = ?', [roomId]);
-    const maxOrder = rows && rows.length > 0 && (rows[0] as any).maxOrder ? Number((rows[0] as any).maxOrder) : 0;
+    const { rows: orderRows } = await pool.query('SELECT MAX(order_index) as max_order FROM questions WHERE room_id = $1', [roomId]);
+    const maxOrder = orderRows.length > 0 && orderRows[0].max_order ? Number(orderRows[0].max_order) : 0;
     const nextOrder = maxOrder + 1;
 
-    let result: ResultSetHeader;
+    let result;
     try {
-      const [r] = await pool.query<ResultSetHeader>(
-        'INSERT INTO questions (room_id, question_text, options, correct_answer_index, order_index, image_url) VALUES (?, ?, ?, ?, ?, ?)',
+      const { rows } = await pool.query(
+        'INSERT INTO questions (room_id, question_text, options, correct_answer_index, order_index, image_url) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
         [roomId, questionText, JSON.stringify(options), correctAnswerIndex, nextOrder, imageUrl || null]
       );
-      result = r;
+      result = rows[0];
     } catch (e: any) {
-      const [r2] = await pool.query<ResultSetHeader>(
-        'INSERT INTO questions (room_id, question_text, options, correct_answer_index, order_index) VALUES (?, ?, ?, ?, ?)',
+      // Fallback if imageUrl column issue or other constraint
+       const { rows } = await pool.query(
+        'INSERT INTO questions (room_id, question_text, options, correct_answer_index, order_index) VALUES ($1, $2, $3, $4, $5) RETURNING id',
         [roomId, questionText, JSON.stringify(options), correctAnswerIndex, nextOrder]
       );
-      result = r2;
+      result = rows[0];
     }
 
     res.status(201).json({
       success: true,
       message: 'Question added',
       question: {
-        id: result.insertId,
+        id: result.id,
         questionText,
         options,
         correctAnswerIndex,
@@ -81,11 +80,11 @@ export const deleteQuestion = async (req: AuthRequest, res: Response) => {
 
   try {
     // Verify ownership via join
-    const [questions] = await pool.query<RowDataPacket[]>(
+    const { rows: questions } = await pool.query(
       `SELECT q.id, r.host_id 
        FROM questions q 
        JOIN rooms r ON q.room_id = r.id 
-       WHERE q.id = ?`, 
+       WHERE q.id = $1`, 
       [id]
     );
 
@@ -95,14 +94,13 @@ export const deleteQuestion = async (req: AuthRequest, res: Response) => {
     }
 
     const userId = (req.user as any).id as number;
-    const qRow = questions[0] as RowDataPacket;
-    const hostId = (qRow as any).host_id as number;
+    const hostId = questions[0].host_id;
     if (hostId !== userId) {
       res.status(403).json({ success: false, message: 'Not authorized' });
       return;
     }
 
-    await pool.query('DELETE FROM questions WHERE id = ?', [id]);
+    await pool.query('DELETE FROM questions WHERE id = $1', [id]);
 
     res.json({ success: true, message: 'Question deleted' });
 
@@ -116,13 +114,13 @@ export const getQuestions = async (req: AuthRequest, res: Response) => {
   const { roomId } = req.params;
 
   try {
-     const [questions] = await pool.query<RowDataPacket[]>(
-      'SELECT * FROM questions WHERE room_id = ? ORDER BY order_index ASC',
+     const { rows: questions } = await pool.query(
+      'SELECT * FROM questions WHERE room_id = $1 ORDER BY order_index ASC',
       [roomId]
     );
     
     // Parse JSON options
-    const parsedQuestions = questions.map(q => ({
+    const parsedQuestions = questions.map((q: any) => ({
         ...q,
         options: typeof q.options === 'string' ? JSON.parse(q.options) : q.options
     }));
