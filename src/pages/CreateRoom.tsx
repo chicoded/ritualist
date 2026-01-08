@@ -41,7 +41,7 @@ const CreateRoom: React.FC = () => {
       if (coverFile) {
         const fd = new FormData();
         fd.append('image', coverFile);
-        const uploadRes = await fetch('http://localhost:5000/api/upload/room-cover', {
+        const uploadRes = await fetch(`${import.meta.env.VITE_API_ORIGIN || 'http://localhost:5000'}/api/upload/room-cover`, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${token}` },
           body: fd,
@@ -51,7 +51,7 @@ const CreateRoom: React.FC = () => {
           coverPhotoUrl = uploadJson.url;
         }
       }
-      const response = await fetch('http://localhost:5000/api/rooms/create', {
+      const response = await fetch(`${import.meta.env.VITE_API_ORIGIN || 'http://localhost:5000'}/api/rooms/create`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',

@@ -11,6 +11,22 @@ const Profile: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const API_ORIGIN = import.meta.env.VITE_API_ORIGIN || 'http://localhost:5000';
 
+  const handleAvatarUpload = async (file: File) => {
+    const fd = new FormData();
+    fd.append('image', file);
+    try {
+      const res = await fetch(`${API_ORIGIN}/api/upload/avatar-image`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: fd
+      });
+      const data = await res.json();
+      if (data.success) {
+        // update user context
+      }
+    } catch {}
+  };
+
   useEffect(() => {
     const run = async () => {
       try {

@@ -19,10 +19,10 @@ const Register: React.FC = () => {
   const handleRegister = async () => {
     setLoading(true);
     try {
-      const response = await fetch('http://localhost:5000/api/auth/register', {
+      const response = await fetch(`${import.meta.env.VITE_API_ORIGIN || 'http://localhost:5000'}/api/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, email, password, role }),
+        body: JSON.stringify({ username, email, password }),
       });
       const data = await response.json();
 
@@ -95,6 +95,12 @@ const Register: React.FC = () => {
             <div style={styles.actions}>
               <button  style={{ width: '100%', padding: 12, borderRadius: 12, border: 'none', outline: 'none', background: '#000', color: '#fff', fontWeight: 700, boxShadow: "1px 5px 10px 2px rgba(255, 255, 255, 0.43)" }} onClick={handleRegister}>Register</button>
               <button  style={{ width: '100%', marginTop: 12, padding: 12, borderRadius: 12, border: 'none', outline: 'none', background: 'transparent', color: '#fff', fontWeight: 700}} onClick={() => setLoginModalOpen(true)}>Already have an account? Login</button>
+              <button style={{ width: '100%', marginTop: 12, padding: 12, borderRadius: 12, border: 'none', outline: 'none', background: '#5865F2', color: '#fff', fontWeight: 700}} onClick={() => {
+                const w = 500, h = 600;
+                const y = window.top ? (window.top.outerHeight - h) / 2 : 100;
+                const x = window.top ? (window.top.outerWidth - w) / 2 : 100;
+                window.open(`${import.meta.env.VITE_API_ORIGIN || 'http://localhost:5000'}/api/auth/discord`, 'discord_oauth', `width=${w},height=${h},top=${y},left=${x}`);
+              }}>Login with Discord</button>
             </div>
             <IonLoading isOpen={loading} message={'Registering...'} />
             <IonToast isOpen={showToast} onDidDismiss={() => setShowToast(false)} message={toastMessage} duration={2000} />

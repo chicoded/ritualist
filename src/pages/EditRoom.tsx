@@ -23,6 +23,7 @@ const EditRoom: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const { token } = useAuth();
   const [segment, setSegment] = useState('questions');
+  const API_ORIGIN = import.meta.env.VITE_API_ORIGIN || 'http://localhost:5000';
   
   // Room State
   const [title, setTitle] = useState('');
@@ -78,7 +79,7 @@ const EditRoom: React.FC = () => {
 
   const fetchQuestions = async () => {
     try {
-      const res = await fetch(`http://localhost:5000/api/questions/room/${id}`, {
+      const res = await fetch(`${API_ORIGIN}/api/questions/room/${id}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await res.json();
@@ -96,7 +97,7 @@ const EditRoom: React.FC = () => {
       if (coverFile) {
         const fd = new FormData();
         fd.append('image', coverFile);
-        const up = await fetch(`http://localhost:5000/api/upload/room-cover`, {
+        const up = await fetch(`${API_ORIGIN}/api/upload/room-cover`, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${token}` },
           body: fd,
@@ -104,7 +105,7 @@ const EditRoom: React.FC = () => {
         const upJson = await up.json();
         if (upJson?.success && upJson?.url) newCoverUrl = upJson.url;
       }
-      const res = await fetch(`http://localhost:5000/api/rooms/${id}`, {
+      const res = await fetch(`${API_ORIGIN}/api/rooms/${id}`, {
         method: 'PUT',
         headers: { 
           'Content-Type': 'application/json',
@@ -255,7 +256,7 @@ const EditRoom: React.FC = () => {
               {(coverPreview || coverUrl) && (
                 <div style={{ marginTop: 8 }}>
                   <img 
-                    src={coverPreview ? coverPreview : (coverUrl?.startsWith('/uploads') ? `http://localhost:5000${coverUrl}` : coverUrl || '')}
+                    src={coverPreview ? coverPreview : (coverUrl?.startsWith('/uploads') ? `${API_ORIGIN}${coverUrl}` : coverUrl || '')}
                     alt="cover"
                     style={{ maxWidth: '100%', borderRadius: 8 }}
                   />
@@ -349,7 +350,7 @@ const EditRoom: React.FC = () => {
                         <img
                           src={(() => {
                             const raw = (q as any).image_url || (q as any).imageUrl;
-                            return typeof raw === 'string' && raw.startsWith('/uploads') ? `http://localhost:5000${raw}` : raw;
+                            return typeof raw === 'string' && raw.startsWith('/uploads') ? `${API_ORIGIN}${raw}` : raw;
                           })()}
                           alt="Question"
                           className="mb-3 max-h-48 object-contain border rounded"

@@ -21,6 +21,7 @@ interface Room {
 const Dashboard: React.FC = () => {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [loading, setLoading] = useState(true);
+  const API_ORIGIN = import.meta.env.VITE_API_ORIGIN || 'http://localhost:5000';
   const { token, user } = useAuth();
   const history = useHistory();
   const [myScore, setMyScore] = useState<{ total: number; correct: number; answered: number }>({ total: 0, correct: 0, answered: 0 });
@@ -44,7 +45,7 @@ const Dashboard: React.FC = () => {
   useEffect(() => {
     fetchMyRooms();
     fetchMyScore();
-    const s = io('http://localhost:5000');
+    const s = io(API_ORIGIN);
     setSocket(s);
     s.emit('subscribe_rooms');
     s.on('rooms_snapshot', (snapshot: any[]) => {
@@ -70,7 +71,7 @@ const Dashboard: React.FC = () => {
 
   const fetchMyRooms = async () => {
     try {
-      const response = await fetch('http://localhost:5000/api/rooms/my-rooms', {
+      const response = await fetch(`${API_ORIGIN}/api/rooms/my-rooms`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await response.json();
@@ -86,7 +87,7 @@ const Dashboard: React.FC = () => {
 
   const fetchMyScore = async () => {
     try {
-      const res = await fetch('http://localhost:5000/api/users/me/score', {
+      const res = await fetch(`${API_ORIGIN}/api/users/me/score`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await res.json();
@@ -94,6 +95,17 @@ const Dashboard: React.FC = () => {
         setMyScore({ total: data.total_score || 0, correct: data.correct || 0, answered: data.answered || 0 });
       }
     } catch (e) {}
+  };
+
+  const deleteRoom = async (id: number) => {
+    if (!confirm('Are you sure you want to delete this room?')) return;
+    try {
+      await fetch(`${API_ORIGIN}/api/rooms/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      fetchMyRooms();
+    } catch {}
   };
 
   const copyInvite = async (roomId: number) => {
