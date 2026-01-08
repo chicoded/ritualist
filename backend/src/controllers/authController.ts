@@ -2,6 +2,7 @@ import { type Request, type Response } from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import pool from '../config/db.js';
+import { type RowDataPacket, type ResultSetHeader } from 'mysql2';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -47,7 +48,7 @@ if(req.method === "GET"){
 
   try {
     // Check if user exists
-    const { rows: existingUsers } = await pool.query('SELECT * FROM users WHERE email = $1 OR username = $2', [email, username]);
+    const [existingUsers] = await pool.query<RowDataPacket[]>('SELECT * FROM users WHERE email = ? OR username = ?', [email, username]);
     if (existingUsers.length > 0) {
       res.status(409).json({ success: false, message: 'User already exists' });
       return;
@@ -59,18 +60,17 @@ if(req.method === "GET"){
 
     const defaultAvatar = pickRandomSiggyAvatar();
     // Insert user
-    const { rows } = await pool.query(
-      'INSERT INTO users (username, email, password_hash, role, avatar_url) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+    const [result] = await pool.query<ResultSetHeader>(
+      'INSERT INTO users (username, email, password_hash, role, avatar_url) VALUES (?, ?, ?, ?, ?)',
       [username, email, passwordHash, role || 'participant', defaultAvatar]
     );
-    const userId = rows[0].id;
 
-    const token = jwt.sign({ id: userId, username, role: role || 'participant' }, JWT_SECRET, { expiresIn: '24h' });
+    const token = jwt.sign({ id: result.insertId, username, role: role || 'participant' }, JWT_SECRET, { expiresIn: '24h' });
 
     res.status(201).json({
       success: true,
       token,
-      user: { id: userId, username, email, role: role || 'participant', avatar_url: defaultAvatar || '' }
+      user: { id: result.insertId, username, email, role: role || 'participant', avatar_url: defaultAvatar || '' }
     });
 
   } catch (error: any) {
@@ -88,7 +88,7 @@ export const login = async (req: Request, res: Response) => {
   }
 
   try {
-    const { rows: users } = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    const [users] = await pool.query<RowDataPacket[]>('SELECT * FROM users WHERE email = ?', [email]);
     if (users.length === 0) {
       res.status(401).json({ success: false, message: 'Invalid credentials' });
       return;
@@ -113,7 +113,7 @@ export const login = async (req: Request, res: Response) => {
     if (needsAvatar) {
       const chosen = pickRandomSiggyAvatar();
       if (chosen) {
-        await pool.query('UPDATE users SET avatar_url = $1 WHERE id = $2', [chosen, user['id']]);
+        await pool.query('UPDATE users SET avatar_url = ? WHERE id = ?', [chosen, user['id']]);
         currentAvatar = chosen;
         user['avatar_url'] = chosen;
       }
@@ -125,7 +125,7 @@ export const login = async (req: Request, res: Response) => {
         if (!fs.existsSync(fsPath)) {
           const chosen = pickRandomSiggyAvatar();
           if (chosen) {
-            await pool.query('UPDATE users SET avatar_url = $1 WHERE id = $2', [chosen, user['id']]);
+            await pool.query('UPDATE users SET avatar_url = ? WHERE id = ?', [chosen, user['id']]);
             currentAvatar = chosen;
             user['avatar_url'] = chosen;
           }
@@ -148,44 +148,55 @@ export const login = async (req: Request, res: Response) => {
   }
 };
 
-export const discordRedirect = (req: Request, res: Response) => {
-  const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
-  const REDIRECT_URI = process.env.DISCORD_REDIRECT_URI;
-  if (!CLIENT_ID || !REDIRECT_URI) {
-    res.status(500).send('Discord config missing');
-    return;
+export const discordRedirect = async (req: Request, res: Response) => {
+  try {
+    const clientId = process.env.DISCORD_CLIENT_ID;
+    const redirectUri = process.env.DISCORD_REDIRECT_URI;
+    if (!clientId || !redirectUri) {
+      res.status(500).json({ success: false, message: 'Discord OAuth not configured: set DISCORD_CLIENT_ID and DISCORD_REDIRECT_URI in .env' });
+      return;
+    }
+    const scope = encodeURIComponent('identify email');
+    const state = Math.random().toString(36).slice(2);
+    const url = `https://discord.com/oauth2/authorize?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scope}&state=${state}`;
+    console.log('Discord OAuth authorize URL:', url);
+    res.redirect(url);
+  } catch (e: any) {
+    res.status(500).json({ success: false, message: 'Discord redirect error' });
   }
-  const url = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify%20email`;
-  res.redirect(url);
 };
 
 export const discordCallback = async (req: Request, res: Response) => {
-  const { code } = req.query;
-  const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
-  const CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
-  const REDIRECT_URI = process.env.DISCORD_REDIRECT_URI;
-
-  if (!code || !CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI) {
-    res.status(400).send('Invalid request or config');
-    return;
-  }
-
   try {
+    const code = req.query.code as string;
+    if (!code) {
+      res.status(400).send('Missing code');
+      return;
+    }
+    const clientId = process.env.DISCORD_CLIENT_ID;
+    const clientSecret = process.env.DISCORD_CLIENT_SECRET;
+    const redirectUri = process.env.DISCORD_REDIRECT_URI;
+    if (!clientId || !clientSecret || !redirectUri) {
+      res.status(500).send('Discord OAuth not configured');
+      return;
+    }
+
+    const body = new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: redirectUri,
+    });
+
     const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
-        grant_type: 'authorization_code',
-        code: String(code),
-        redirect_uri: REDIRECT_URI,
-      }).toString(),
+      body,
     });
-
-    const tokenJson = await tokenRes.json();
+    type DiscordTokenResponse = { access_token?: string; token_type?: string; expires_in?: number; refresh_token?: string; scope?: string };
+    const tokenJson = (await tokenRes.json()) as DiscordTokenResponse;
     if (!tokenRes.ok) {
-      console.error('Discord token error:', tokenJson);
       res.status(400).send('Discord token exchange failed');
       return;
     }
@@ -206,30 +217,30 @@ export const discordCallback = async (req: Request, res: Response) => {
     const avatarUrl = dUser.avatar ? `https://cdn.discordapp.com/avatars/${discordId}/${dUser.avatar}.png` : null;
 
     // Upsert user
-    const { rows: existingByDiscord } = await pool.query(
-      'SELECT * FROM users WHERE discord_id = $1', [discordId]
+    const [existingByDiscord] = await pool.query<RowDataPacket[]>(
+      'SELECT * FROM users WHERE discord_id = ?', [discordId]
     );
     let userId: number;
     if (existingByDiscord.length > 0) {
       const usr = existingByDiscord[0] as any;
       userId = Number(usr.id);
-      await pool.query('UPDATE users SET username = $1, email = COALESCE($2, email), avatar_url = $3 WHERE id = $4', [username, email || usr.email, avatarUrl, userId]);
+      await pool.query('UPDATE users SET username = ?, email = COALESCE(?, email), avatar_url = ? WHERE id = ?', [username, email || usr.email, avatarUrl, userId]);
     } else {
       // If email exists, link account
       let existingEmailId: number | null = null;
       if (email) {
-        const { rows: existingByEmail } = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+        const [existingByEmail] = await pool.query<RowDataPacket[]>('SELECT id FROM users WHERE email = ?', [email]);
         if (existingByEmail.length > 0) existingEmailId = Number((existingByEmail[0] as any).id);
       }
       if (existingEmailId) {
         userId = existingEmailId;
-        await pool.query('UPDATE users SET discord_id = $1, avatar_url = $2, username = $3 WHERE id = $4', [discordId, avatarUrl, username, userId]);
+        await pool.query('UPDATE users SET discord_id = ?, avatar_url = ?, username = ? WHERE id = ?', [discordId, avatarUrl, username, userId]);
       } else {
-        const { rows } = await pool.query(
-          'INSERT INTO users (username, email, password_hash, role, discord_id, avatar_url) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
+        const [ins] = await pool.query<ResultSetHeader>(
+          'INSERT INTO users (username, email, password_hash, role, discord_id, avatar_url) VALUES (?, ?, ?, ?, ?, ?)',
           [username, email, '', 'participant', discordId, avatarUrl]
         );
-        userId = rows[0].id;
+        userId = ins.insertId;
       }
     }
 

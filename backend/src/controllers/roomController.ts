@@ -1,5 +1,6 @@
 import { type Request, type Response } from 'express';
 import pool from '../config/db.js';
+import { type RowDataPacket, type ResultSetHeader } from 'mysql2';
 import bcrypt from 'bcrypt';
 import { type AuthRequest } from '../middleware/authMiddleware.js';
 
@@ -38,7 +39,7 @@ export const createRoom = async (req: AuthRequest, res: Response) => {
 
     // Ensure room code is unique
     while (!isUnique) {
-      const { rows: existing } = await pool.query('SELECT id FROM rooms WHERE room_code = $1', [roomCode]);
+      const [existing] = await pool.query<RowDataPacket[]>('SELECT id FROM rooms WHERE room_code = ?', [roomCode]);
       if (existing.length === 0) {
         isUnique = true;
       } else {
@@ -52,10 +53,10 @@ export const createRoom = async (req: AuthRequest, res: Response) => {
         passwordHash = await bcrypt.hash(password, salt);
     }
 
-    const { rows } = await pool.query(
+    const [result] = await pool.query<ResultSetHeader>(
       `INSERT INTO rooms 
       (room_code, host_id, title, max_participants, time_per_question, is_public, password_hash, start_time, cover_photo_url) 
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         roomCode,
         req.user.id,
@@ -73,7 +74,7 @@ export const createRoom = async (req: AuthRequest, res: Response) => {
       success: true,
       message: 'Room created successfully',
       room: {
-        id: rows[0].id,
+        id: result.insertId,
         roomCode,
         title,
         isPublic: isPublic !== undefined ? isPublic : true,
@@ -93,17 +94,17 @@ export const getRooms = async (req: Request, res: Response) => {
         // List rooms:
         // - Public: status must be 'published' and has questions
         // - Private: status 'waiting' AND start_time set AND has questions
-        const { rows: rooms } = await pool.query(
+        const [rooms] = await pool.query<RowDataPacket[]>(
             `SELECT r.id, r.room_code, r.title, r.max_participants, r.status, r.is_public, r.is_published, r.published_at, r.start_time, r.created_at, r.host_id, r.cover_photo_url,
             (SELECT COUNT(*) FROM participants p WHERE p.room_id = r.id) as participant_count
              FROM rooms r
              WHERE (
-               r.is_public = true 
-               AND r.is_published = true 
+               r.is_public = 1 
+               AND r.is_published = 1 
                AND (SELECT COUNT(*) FROM questions q WHERE q.room_id = r.id) > 0
              )
              OR (
-               r.is_public = false 
+               r.is_public = 0 
                AND LOWER(r.status) IN ('waiting','published')
                AND r.start_time IS NOT NULL 
                AND (SELECT COUNT(*) FROM questions q WHERE q.room_id = r.id) > 0
@@ -120,11 +121,11 @@ export const getRooms = async (req: Request, res: Response) => {
 
 export const getRecentPublicRooms = async (_req: Request, res: Response) => {
   try {
-    const { rows: rooms } = await pool.query(
+    const [rooms] = await pool.query<RowDataPacket[]>(
       `SELECT r.id, r.room_code, r.title, r.published_at, r.created_at, r.cover_photo_url,
               (SELECT COUNT(*) FROM participants p WHERE p.room_id = r.id) AS participant_count
        FROM rooms r
-       WHERE r.is_public = true AND COALESCE(r.is_published, false) = true
+       WHERE r.is_public = 1 AND COALESCE(r.is_published, 0) = 1
        ORDER BY r.published_at DESC, r.created_at DESC
        LIMIT 20`
     );
@@ -137,11 +138,11 @@ export const getRecentPublicRooms = async (_req: Request, res: Response) => {
 
 export const getAllPublicRooms = async (_req: Request, res: Response) => {
   try {
-    const { rows: rooms } = await pool.query(
+    const [rooms] = await pool.query<RowDataPacket[]>(
       `SELECT r.id, r.room_code, r.title, r.published_at, r.created_at, r.cover_photo_url,
               (SELECT COUNT(*) FROM participants p WHERE p.room_id = r.id) AS participant_count
        FROM rooms r
-       WHERE r.is_public = true AND COALESCE(r.is_published, false) = true
+       WHERE r.is_public = 1 AND COALESCE(r.is_published, 0) = 1
        ORDER BY r.published_at DESC, r.created_at DESC`
     );
     res.json({ success: true, rooms });
@@ -158,9 +159,9 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
     }
 
     try {
-        const { rows: rooms } = await pool.query(
+        const [rooms] = await pool.query<RowDataPacket[]>(
             `SELECT r.*, (SELECT COUNT(*) FROM participants p WHERE p.room_id = r.id) as participant_count
-             FROM rooms r WHERE r.host_id = $1 ORDER BY r.created_at DESC`,
+             FROM rooms r WHERE r.host_id = ? ORDER BY r.created_at DESC`,
             [req.user.id]
         );
         res.json({ success: true, rooms });
@@ -173,11 +174,11 @@ export const getMyRooms = async (req: AuthRequest, res: Response) => {
 export const getRoomParticipants = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
     try {
-        const { rows: participants } = await pool.query(
+        const [participants] = await pool.query<RowDataPacket[]>(
             `SELECT u.id, u.username, p.joined_at 
              FROM participants p 
              JOIN users u ON p.user_id = u.id 
-             WHERE p.room_id = $1 
+             WHERE p.room_id = ? 
              ORDER BY p.joined_at DESC`,
             [id]
         );
@@ -195,22 +196,22 @@ export const getRoomInfoForUser = async (req: AuthRequest, res: Response) => {
   }
   const { id } = req.params;
   try {
-    const { rows: rooms } = await pool.query(
-      'SELECT id, title, is_public, time_per_question, start_time, host_id FROM rooms WHERE id = $1', [id]
+    const [rooms] = await pool.query<RowDataPacket[]>(
+      'SELECT id, title, is_public, time_per_question, start_time, host_id FROM rooms WHERE id = ?', [id]
     );
     if (!rooms || rooms.length === 0) {
       res.status(404).json({ success: false, message: 'Room not found' });
       return;
     }
-    const room = rooms[0];
-    const { rows: qRows } = await pool.query('SELECT COUNT(*) AS total FROM questions WHERE room_id = $1', [id]);
+    const room = rooms[0] as RowDataPacket;
+    const [qRows] = await pool.query<RowDataPacket[]>('SELECT COUNT(*) AS total FROM questions WHERE room_id = ?', [id]);
     const total = Number((qRows[0] as any).total) || 0;
-    const { rows: aRows } = await pool.query(
-      'SELECT COUNT(*) AS answered FROM answers WHERE room_id = $1 AND user_id = $2', [id, req.user.id]
+    const [aRows] = await pool.query<RowDataPacket[]>(
+      'SELECT COUNT(*) AS answered FROM answers WHERE room_id = ? AND user_id = ?', [id, req.user.id]
     );
     const answered = Number((aRows[0] as any).answered) || 0;
-    const { rows: scoreRows } = await pool.query(
-      'SELECT total_score, position FROM participants WHERE room_id = $1 AND user_id = $2', [id, req.user.id]
+    const [scoreRows] = await pool.query<RowDataPacket[]>(
+      'SELECT total_score, position FROM participants WHERE room_id = ? AND user_id = ?', [id, req.user.id]
     );
     const total_score = scoreRows.length ? (scoreRows[0] as any).total_score : 0;
     const position = scoreRows.length ? (scoreRows[0] as any).position : null;
@@ -230,19 +231,19 @@ export const getRoomById = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
 
     try {
-        const { rows: rooms } = await pool.query('SELECT * FROM rooms WHERE id = $1', [id]);
+        const [rooms] = await pool.query<RowDataPacket[]>('SELECT * FROM rooms WHERE id = ?', [id]);
         
         if (!rooms || rooms.length === 0) {
             res.status(404).json({ success: false, message: 'Room not found' });
             return;
         }
 
-        const room = rooms[0];
+        const room = rooms[0] as RowDataPacket;
         
         // Allow host to see, and allow participants to see
         if (room.host_id !== req.user.id) {
-            const { rows: part } = await pool.query(
-              'SELECT 1 FROM participants WHERE user_id = $1 AND room_id = $2',
+            const [part] = await pool.query<RowDataPacket[]>(
+              'SELECT 1 FROM participants WHERE user_id = ? AND room_id = ?',
               [req.user.id, id]
             );
             if (!part || part.length === 0) {
@@ -269,14 +270,14 @@ export const updateRoom = async (req: AuthRequest, res: Response) => {
 
     try {
         // Verify ownership
-        const { rows: rooms } = await pool.query('SELECT host_id FROM rooms WHERE id = $1', [id]);
+        const [rooms] = await pool.query<RowDataPacket[]>('SELECT host_id FROM rooms WHERE id = ?', [id]);
         
         if (!rooms || rooms.length === 0) {
             res.status(404).json({ success: false, message: 'Room not found' });
             return;
         }
 
-        const room = rooms[0];
+        const room = rooms[0] as RowDataPacket;
 
         if (room.host_id !== req.user.id) {
             res.status(403).json({ success: false, message: 'Not authorized' });
@@ -284,22 +285,21 @@ export const updateRoom = async (req: AuthRequest, res: Response) => {
         }
 
         // Prepare update query
-        let query = 'UPDATE rooms SET title = $1, max_participants = $2, time_per_question = $3, is_public = $4, start_time = $5';
+        let query = 'UPDATE rooms SET title = ?, max_participants = ?, time_per_question = ?, is_public = ?, start_time = ?';
         const params: any[] = [title, maxParticipants, timePerQuestion, isPublic, startTime || null];
-        let paramIdx = 6;
 
         if (password) {
              const salt = await bcrypt.genSalt(10);
              const passwordHash = await bcrypt.hash(password, salt);
-             query += `, password_hash = $${paramIdx++}`;
+             query += ', password_hash = ?';
              params.push(passwordHash);
         }
 
         if (coverPhotoUrl !== undefined) {
-            query += `, cover_photo_url = $${paramIdx++}`;
+            query += ', cover_photo_url = ?';
             params.push(coverPhotoUrl || null);
         }
-        query += ` WHERE id = $${paramIdx++}`;
+        query += ' WHERE id = ?';
         params.push(id);
 
         await pool.query(query, params);
@@ -321,21 +321,21 @@ export const deleteRoom = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
 
     try {
-        const { rows: rooms } = await pool.query('SELECT host_id FROM rooms WHERE id = $1', [id]);
+        const [rooms] = await pool.query<RowDataPacket[]>('SELECT host_id FROM rooms WHERE id = ?', [id]);
         
         if (!rooms || rooms.length === 0) {
             res.status(404).json({ success: false, message: 'Room not found' });
             return;
         }
 
-        const room = rooms[0];
+        const room = rooms[0] as RowDataPacket;
 
         if (room.host_id !== req.user.id) {
             res.status(403).json({ success: false, message: 'Not authorized' });
             return;
         }
 
-        await pool.query('DELETE FROM rooms WHERE id = $1', [id]);
+        await pool.query('DELETE FROM rooms WHERE id = ?', [id]);
         res.json({ success: true, message: 'Room deleted successfully' });
 
     } catch (error: any) {
@@ -354,14 +354,14 @@ export const joinRoom = async (req: AuthRequest, res: Response) => {
     const { password } = req.body;
 
     try {
-    const { rows: rooms } = await pool.query('SELECT id, password_hash, is_public, host_id FROM rooms WHERE id = $1', [id]);
+    const [rooms] = await pool.query<RowDataPacket[]>('SELECT id, password_hash, is_public, host_id FROM rooms WHERE id = ?', [id]);
         
         if (!rooms || rooms.length === 0) {
             res.status(404).json({ success: false, message: 'Room not found' });
             return;
         }
 
-        const room = rooms[0];
+        const room = rooms[0] as RowDataPacket;
 
         if (!room.is_public) {
              if (!password) {
@@ -376,11 +376,11 @@ export const joinRoom = async (req: AuthRequest, res: Response) => {
          }
  
          // Check if user is already a participant
-        const { rows: existing } = await pool.query('SELECT * FROM participants WHERE user_id = $1 AND room_id = $2', [req.user.id, id]);
+        const [existing] = await pool.query<RowDataPacket[]>('SELECT * FROM participants WHERE user_id = ? AND room_id = ?', [req.user.id, id]);
         
         if (existing.length === 0) {
             // Add to participants
-            await pool.query('INSERT INTO participants (user_id, room_id) VALUES ($1, $2)', [req.user.id, id]);
+            await pool.query('INSERT INTO participants (user_id, room_id) VALUES (?, ?)', [req.user.id, id]);
         }
 
         res.json({ success: true, message: 'Joined successfully' });
@@ -400,7 +400,7 @@ export const leaveRoom = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
 
     try {
-        await pool.query('DELETE FROM participants WHERE user_id = $1 AND room_id = $2', [req.user.id, id]);
+        await pool.query('DELETE FROM participants WHERE user_id = ? AND room_id = ?', [req.user.id, id]);
         res.json({ success: true, message: 'Left room successfully' });
     } catch (error: any) {
         console.error('Leave Room Error:', error);
@@ -415,14 +415,14 @@ export const publishRoom = async (req: AuthRequest, res: Response) => {
   }
   const { id } = req.params;
   try {
-    const { rows: rooms } = await pool.query(
-      'SELECT host_id, is_public FROM rooms WHERE id = $1', [id]
+    const [rooms] = await pool.query<RowDataPacket[]>(
+      'SELECT host_id, is_public FROM rooms WHERE id = ?', [id]
     );
     if (!rooms || rooms.length === 0) {
       res.status(404).json({ success: false, message: 'Room not found' });
       return;
     }
-    const room = rooms[0];
+    const room = rooms[0] as RowDataPacket;
 
     if (req.user.id === (room as any).host_id) {
       res.status(403).json({ success: false, message: 'Host cannot participate in own room' });
@@ -432,8 +432,8 @@ export const publishRoom = async (req: AuthRequest, res: Response) => {
       res.status(403).json({ success: false, message: 'Not authorized' });
       return;
     }
-    const { rows: qRows } = await pool.query(
-      'SELECT COUNT(*) AS total FROM questions WHERE room_id = $1', [id]
+    const [qRows] = await pool.query<RowDataPacket[]>(
+      'SELECT COUNT(*) AS total FROM questions WHERE room_id = ?', [id]
     );
     const total = Number((qRows[0] as any).total) || 0;
     if (total === 0) {
@@ -441,9 +441,9 @@ export const publishRoom = async (req: AuthRequest, res: Response) => {
       return;
     }
     if (room.is_public) {
-      await pool.query('UPDATE rooms SET status = $1, is_published = true, published_at = NOW() WHERE id = $2', ['published', id]);
+      await pool.query('UPDATE rooms SET status = ?, is_published = 1, published_at = NOW() WHERE id = ?', ['published', id]);
     } else {
-      await pool.query('UPDATE rooms SET status = $1 WHERE id = $2', ['waiting', id]);
+      await pool.query('UPDATE rooms SET status = ? WHERE id = ?', ['waiting', id]);
     }
     res.json({ success: true, message: 'Room published' });
   } catch (error: any) {

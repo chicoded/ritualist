@@ -59,7 +59,7 @@ router.post('/avatar-image', authenticateToken, avatarUpload.single('image'), as
   try {
     const userId = (req as any).user?.id;
     if (userId) {
-      await (await import('../config/db.js')).default.query('UPDATE users SET avatar_url = $1 WHERE id = $2', [urlPath, userId]);
+      await (await import('../config/db.js')).default.query('UPDATE users SET avatar_url = ? WHERE id = ?', [urlPath, userId]);
     }
   } catch {}
   res.json({ success: true, url: urlPath });
