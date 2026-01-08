@@ -9,16 +9,24 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 function pickRandomSiggyAvatar() {
     try {
-        const dir = path.resolve(__dirname, '../uploads', 'siggy');
-        if (!fs.existsSync(dir))
+        const dir = path.resolve(__dirname, '../../uploads', 'siggy');
+        console.log('Picking avatar from:', dir);
+        if (!fs.existsSync(dir)) {
+            console.log('Avatar directory not found:', dir);
             return null;
+        }
         const files = fs.readdirSync(dir).filter(f => /\.(png|jpe?g|webp|gif)$/i.test(f));
-        if (files.length === 0)
+        if (files.length === 0) {
+            console.log('No avatar files found in:', dir);
             return null;
+        }
         const chosen = files[Math.floor(Math.random() * files.length)];
-        return `/uploads/siggy/${chosen}`;
+        const result = `/uploads/siggy/${chosen}`;
+        console.log('Selected avatar:', result);
+        return result;
     }
-    catch {
+    catch (e) {
+        console.error('Error picking avatar:', e);
         return null;
     }
 }
@@ -94,7 +102,7 @@ export const login = async (req, res) => {
             // If it's an uploads path, ensure file exists; otherwise pick a random
             try {
                 const rel = currentAvatar.replace(/^\/uploads\//, '');
-                const fsPath = path.resolve(__dirname, '../uploads', rel);
+                const fsPath = path.resolve(__dirname, '../../uploads', rel);
                 if (!fs.existsSync(fsPath)) {
                     const chosen = pickRandomSiggyAvatar();
                     if (chosen) {

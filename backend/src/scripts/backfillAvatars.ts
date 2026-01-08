@@ -18,7 +18,7 @@ async function backfill() {
   });
 
   try {
-    const [users] = await connection.query('SELECT id, username, avatar_url FROM users WHERE avatar_url IS NULL OR avatar_url = ""');
+    const [users]: any = await connection.query('SELECT id, username, avatar_url FROM users WHERE avatar_url IS NULL OR avatar_url = ""');
     console.log(`Found ${users.length} users needing avatars.`);
 
     const dir = path.resolve(__dirname, '../../uploads', 'siggy');

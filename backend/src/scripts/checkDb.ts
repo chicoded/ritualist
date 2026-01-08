@@ -26,7 +26,7 @@ async function checkDb() {
     try {
         const [users] = await connection.query('SELECT * FROM users LIMIT 5');
         console.log('Users:', users);
-    } catch (e) {
+    } catch (e: any) {
         console.log('Error querying users:', e.message);
     }
 
