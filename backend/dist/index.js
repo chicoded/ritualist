@@ -374,9 +374,11 @@ app.use('/api/questions', questionRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/answers', answerRoutes);
 app.use('/api/users', userRoutes);
+/*
 app.get('/', (req, res) => {
-    res.send('RitualQuiz Backend is running');
+  res.send('RitualQuiz Backend is running');
 });
+*/
 // Test DB connection
 app.get('/api/health', async (req, res) => {
     try {
